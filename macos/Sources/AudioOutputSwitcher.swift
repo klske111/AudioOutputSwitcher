@@ -13,41 +13,74 @@ private let escapeKeyCode: Int64 = 53
 struct AudioDevice: Equatable {
     let id: AudioObjectID
     let name: String
+    let transportType: UInt32
+    let terminalTypes: Set<UInt32>
 }
 
 enum DeviceIcon {
-    static func symbolName(for deviceName: String) -> String {
-        let name = deviceName.lowercased()
+    static func symbolName(for device: AudioDevice) -> String {
+        let name = device.name.lowercased()
         if name.contains("airpods max") { return "airpodsmax" }
         if name.contains("airpods pro") { return "airpodspro" }
         if name.contains("airpods") { return "airpods" }
+
+        if device.transportType == kAudioDeviceTransportTypeHDMI ||
+           device.transportType == kAudioDeviceTransportTypeDisplayPort ||
+           device.terminalTypes.contains(kAudioStreamTerminalTypeHDMI) ||
+           device.terminalTypes.contains(kAudioStreamTerminalTypeDisplayPort) {
+            return "display"
+        }
         if name.contains("mchose") || name.contains("headset") || name.contains("耳机") {
+            return "headphones"
+        }
+        if device.terminalTypes.contains(kAudioStreamTerminalTypeHeadphones) {
             return "headphones"
         }
         if name.contains("macbook") && (name.contains("speaker") || name.contains("扬声器")) {
             return "laptopcomputer"
         }
-        if name.contains("display") || name.contains("monitor") || name.contains("显示器") {
+        if name.contains("h27t22") || name.contains("display") || name.contains("monitor") || name.contains("显示器") {
             return "display"
         }
-        if name.contains("virtual") || name.contains("虚拟") {
+        if device.transportType == kAudioDeviceTransportTypeAirPlay {
+            return "airplayaudio"
+        }
+        if device.transportType == kAudioDeviceTransportTypeVirtual ||
+           device.transportType == kAudioDeviceTransportTypeAggregate ||
+           name.contains("virtual") || name.contains("虚拟") {
             return "waveform.path"
+        }
+        if device.transportType == kAudioDeviceTransportTypeBluetooth ||
+           device.transportType == kAudioDeviceTransportTypeBluetoothLE {
+            if name.contains("speaker") || name.contains("音箱") || name.contains("扬声器") {
+                return "hifispeaker"
+            }
+            return "headphones"
         }
         return "speaker.wave.2"
     }
 
-    static func image(for deviceName: String) -> NSImage {
+    static func image(for device: AudioDevice) -> NSImage {
         NSImage(
-            systemSymbolName: symbolName(for: deviceName),
-            accessibilityDescription: deviceName
+            systemSymbolName: symbolName(for: device),
+            accessibilityDescription: device.name
         ) ?? NSImage(
             systemSymbolName: "speaker.wave.2",
-            accessibilityDescription: deviceName
+            accessibilityDescription: device.name
         ) ?? NSImage()
     }
 
-    static func menuBarImage(for deviceName: String) -> NSImage {
-        let image = image(for: deviceName)
+    static func menuBarImage(for device: AudioDevice) -> NSImage {
+        let image = image(for: device)
+        image.isTemplate = true
+        return image
+    }
+
+    static func fallbackMenuBarImage(deviceName: String) -> NSImage {
+        let image = NSImage(
+            systemSymbolName: "speaker.wave.2",
+            accessibilityDescription: deviceName
+        ) ?? NSImage()
         image.isTemplate = true
         return image
     }
@@ -91,7 +124,12 @@ enum AudioManager {
 
         let devices = ids.compactMap { id -> AudioDevice? in
             guard hasOutputChannels(id), isAlive(id) else { return nil }
-            return AudioDevice(id: id, name: deviceName(id) ?? "音频设备 \(id)")
+            return AudioDevice(
+                id: id,
+                name: deviceName(id) ?? "音频设备 \(id)",
+                transportType: deviceTransportType(id) ?? kAudioDeviceTransportTypeUnknown,
+                terminalTypes: outputTerminalTypes(id)
+            )
         }
         guard !devices.isEmpty else { throw AudioError.noOutputDevices }
         return devices.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -365,6 +403,58 @@ enum AudioManager {
         }
         return status == noErr ? value as String : nil
     }
+
+    private static func deviceTransportType(_ id: AudioObjectID) -> UInt32? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var value: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &value) == noErr else {
+            return nil
+        }
+        return value
+    }
+
+    private static func outputTerminalTypes(_ id: AudioObjectID) -> Set<UInt32> {
+        var streamsAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreams,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(id, &streamsAddress, 0, nil, &size) == noErr,
+              size >= UInt32(MemoryLayout<AudioStreamID>.size) else { return [] }
+
+        var streams = Array(
+            repeating: AudioStreamID(0),
+            count: Int(size) / MemoryLayout<AudioStreamID>.size
+        )
+        guard AudioObjectGetPropertyData(id, &streamsAddress, 0, nil, &size, &streams) == noErr else {
+            return []
+        }
+
+        return Set(streams.compactMap { stream -> UInt32? in
+            var terminalAddress = AudioObjectPropertyAddress(
+                mSelector: kAudioStreamPropertyTerminalType,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var terminalType: UInt32 = 0
+            var terminalSize = UInt32(MemoryLayout<UInt32>.size)
+            guard AudioObjectGetPropertyData(
+                stream,
+                &terminalAddress,
+                0,
+                nil,
+                &terminalSize,
+                &terminalType
+            ) == noErr else { return nil }
+            return terminalType
+        })
+    }
 }
 
 enum AppLog {
@@ -544,7 +634,7 @@ final class DeviceRowView: NSView {
             ? NSColor.white.withAlphaComponent(0.32).cgColor
             : NSColor.white.withAlphaComponent(0.08).cgColor
 
-        let symbol = NSImageView(image: DeviceIcon.image(for: device.name))
+        let symbol = NSImageView(image: DeviceIcon.image(for: device))
         symbol.contentTintColor = selected ? .white : .secondaryLabelColor
         symbol.translatesAutoresizingMaskIntoConstraints = false
 
@@ -666,7 +756,7 @@ final class OverlayPanel: NSPanel {
         orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.12
-            animator().alphaValue = 1
+            animator().alphaValue = 0.9
         }
 
         if autoHide {
@@ -1121,7 +1211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 item.target = self
                 item.representedObject = NSNumber(value: device.id)
                 item.state = device.id == currentID ? .on : .off
-                let icon = DeviceIcon.menuBarImage(for: device.name)
+                let icon = DeviceIcon.menuBarImage(for: device)
                 icon.size = NSSize(width: 17, height: 17)
                 item.image = icon
                 statusMenu.addItem(item)
@@ -1301,21 +1391,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func refreshStatusItemIcon(deviceName suppliedName: String? = nil) {
-        let name: String
-        if let suppliedName {
-            name = suppliedName
-        } else {
-            do {
-                let currentID = try AudioManager.defaultOutputID()
-                name = try AudioManager.outputDevices().first(where: { $0.id == currentID })?.name
-                    ?? "声音输出"
-            } catch {
-                name = "声音输出"
-            }
-        }
-        statusItem.button?.image = DeviceIcon.menuBarImage(for: name)
+        let currentID = try? AudioManager.defaultOutputID()
+        let currentDevice = try? AudioManager.outputDevices().first(where: { $0.id == currentID })
+        let name = currentDevice?.name ?? suppliedName ?? "声音输出"
+        statusItem.button?.image = currentDevice.map(DeviceIcon.menuBarImage(for:))
+            ?? DeviceIcon.fallbackMenuBarImage(deviceName: name)
         let volumeText: String
-        if let currentID = try? AudioManager.defaultOutputID(),
+        if let currentID,
            let percent = AudioManager.volumePercent(for: currentID) {
             volumeText = "音量 \(percent)%"
         } else {
