@@ -22,6 +22,11 @@ mkdir -p "$MODULE_CACHE_DIR" "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resour
 cp "$REPO_DIR/App/Info.plist" "$APP_DIR/Contents/Info.plist"
 cp "$REPO_DIR/Resources/AppIcon.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
 
+if [[ -n "${RELEASE_VERSION:-}" ]]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $RELEASE_VERSION" \
+        "$APP_DIR/Contents/Info.plist"
+fi
+
 CLANG_MODULE_CACHE_PATH="$MODULE_CACHE_DIR" \
 SWIFT_MODULECACHE_PATH="$MODULE_CACHE_DIR" \
 swiftc \

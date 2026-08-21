@@ -1,0 +1,61 @@
+name: Build and release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Windows package
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          .\windows\scripts\build.ps1 -Version $version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-package
+          path: |
+            windows/dist/*.zip
+            windows/dist/*.sha256
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build macOS package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          RELEASE_VERSION="$version" ./macos/scripts/build.sh
+          mv macos/dist/AudioOutputSwitcher.zip "macos/dist/AudioOutputSwitcher-macOS-arm64-$version.zip"
+          shasum -a 256 "macos/dist/AudioOutputSwitcher-macOS-arm64-$version.zip" > "macos/dist/AudioOutputSwitcher-macOS-arm64-$version.zip.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-package
+          path: |
+            macos/dist/*.zip
+            macos/dist/*.sha256
+
+  release:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" artifacts/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "声音输出切换器 ${GITHUB_REF_NAME}" \
+            --notes "首次统一 Windows 与 macOS 的双平台发布。Windows 使用 Alt + V，macOS 使用 Option + V；两个平台都支持菜单直接切换设备和调节音量。"
+

@@ -1,6 +1,14 @@
-.DS_Store
-.build/
+# Build output
 dist/
+windows/dist/
+macos/dist/
+macos/.build/
 release/
 *.zip
+*.sha256
 
+# IDE / OS
+.DS_Store
+.vs/
+*.user
+*.suo
